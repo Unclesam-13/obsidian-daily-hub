@@ -73,3 +73,9 @@ AI 整理使用 OpenAI 兼容接口，默认是 DeepSeek：
 ## License
 
 MIT
+
+## 发布新版本（维护者）
+
+1. 修改 `manifest.json` 和 `versions.json` 中的版本号。
+2. 更新 `.github/release-notes.md`。
+3. 提交后推送同名标签，例如 `git tag 1.2.0 && git push origin 1.2.0`，GitHub Actions 会自动创建 Release 并附上 `main.js`、`manifest.json`、`styles.css`。
