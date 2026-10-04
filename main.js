@@ -53,6 +53,8 @@ const DEFAULT_SETTINGS = {
   sideTab: "memo",
   todoFolder: "项目/待办",
   showDoneTodos: false,
+  syncToFile: true,
+  syncFilePath: "项目/主页设置.md",
   links: [],
   aiExtraPrompt: "",
   projectHints: "",
@@ -72,6 +74,88 @@ const AI_PROVIDERS = [
   { id: "custom", name: "自定义（OpenAI 兼容）", baseUrl: "", model: "", format: "openai" },
 ];
 const providerOf = (id) => AI_PROVIDERS.find((p) => p.id === id) || AI_PROVIDERS[AI_PROVIDERS.length - 1];
+
+/* ---------- 设置 <-> 笔记文件同步 ---------- */
+
+const SYNC_SECTIONS = [
+  ["memo", "写给自己"],
+  ["links", "常用链接"],
+  ["projectHints", "项目说明"],
+  ["excludedFolderPrefixes", "排除的目录"],
+  ["aiExtraPrompt", "额外要求"],
+];
+const SYNC_MARK = /^##\s.*<!--\s*dh:(\w+)\s*-->\s*$/;
+
+function buildSyncFile(s) {
+  const out = [
+    "---",
+    "daily-hub: settings",
+    "---",
+    "",
+    "> [!info] Daily Hub 主页设置",
+    "> 这个笔记和插件设置双向同步：在这里改，设置会跟着变；在设置里改，这里也会更新。",
+    "> 请保留每个二级标题末尾的 `<!-- dh:… -->` 标记，标题之间的内容可以随意修改。",
+    "",
+  ];
+  for (const [key, title] of SYNC_SECTIONS) {
+    out.push(`## ${title} <!-- dh:${key} -->`, "");
+    if (key === "links") {
+      for (const l of s.links || []) {
+        if (!l || !(l.url || l.name)) continue;
+        out.push(`- [${(l.name || "").replace(/[\[\]]/g, "")}](<${l.url || ""}>)`);
+      }
+    } else if (key === "projectHints") {
+      for (const line of (s.projectHints || "").split(/\r?\n/)) if (line.trim()) out.push(`- ${line.trim()}`);
+    } else if (key === "excludedFolderPrefixes") {
+      for (const x of s.excludedFolderPrefixes || []) out.push(`- ${x}`);
+    } else {
+      const v = (s[key] || "").trim();
+      if (v) out.push(v);
+    }
+    out.push("");
+  }
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
+}
+
+function parseSyncFile(text) {
+  const body = text.replace(/^---\n[\s\S]*?\n---\n?/, "");
+  const sections = {};
+  let cur = null;
+  for (const line of body.split(/\r?\n/)) {
+    const m = line.match(SYNC_MARK);
+    if (m) {
+      cur = m[1];
+      sections[cur] = [];
+    } else if (cur) {
+      sections[cur].push(line);
+    }
+  }
+  const out = {};
+  const bullet = (l) => l.replace(/^\s*[-*+]\s+/, "").trim();
+  if (sections.memo) out.memo = sections.memo.join("\n").trim();
+  if (sections.aiExtraPrompt) out.aiExtraPrompt = sections.aiExtraPrompt.join("\n").trim();
+  if (sections.projectHints) {
+    out.projectHints = sections.projectHints.filter((l) => l.trim()).map(bullet).filter(Boolean).join("\n");
+  }
+  if (sections.excludedFolderPrefixes) {
+    out.excludedFolderPrefixes = sections.excludedFolderPrefixes
+      .filter((l) => /^\s*[-*+]\s+\S/.test(l))
+      .map((l) => bullet(l).replace(/^`|`$/g, ""))
+      .filter(Boolean);
+  }
+  if (sections.links) {
+    out.links = [];
+    for (const l of sections.links) {
+      const m = l.match(/^\s*[-*+]\s+\[([^\]]*)\]\(\s*<?([^>)]*?)>?\s*\)/);
+      if (m) out.links.push({ name: m[1].trim(), url: m[2].trim() });
+      else if (/^\s*[-*+]\s+https?:\/\//.test(l)) {
+        const u = bullet(l);
+        out.links.push({ name: u, url: u });
+      }
+    }
+  }
+  return out;
+}
 
 /* ---------- helpers ---------- */
 
@@ -1457,6 +1541,57 @@ class DailyHubSettingTab extends PluginSettingTab {
         });
       });
 
+    new Setting(containerEl).setName("同步到笔记文件").setHeading();
+    containerEl.createDiv({
+      cls: "setting-item-description",
+      text: "把「写给自己」「常用链接」「项目说明」「排除的目录」「额外要求」保存到库里的一个笔记中，和这里的设置双向同步。这样它们会随笔记一起同步到其他设备，也能直接在笔记里编辑。这个笔记不会出现在主页里。API Key 不会写进去。",
+    });
+    new Setting(containerEl)
+      .setName("开启同步")
+      .addToggle((t) =>
+        t.setValue(s.syncToFile).onChange(async (v) => {
+          s.syncToFile = v;
+          await this.plugin.saveData(s);
+          if (v) await this.plugin.syncFromFile({ createIfMissing: true });
+        })
+      );
+    new Setting(containerEl)
+      .setName("设置文件位置")
+      .setDesc("从库的根目录开始写，例如：项目/主页设置.md。修改后会在新位置创建文件，旧文件不会删除。")
+      .addText((t) =>
+        t.setPlaceholder("项目/主页设置.md").setValue(s.syncFilePath).onChange(async (v) => {
+          s.syncFilePath = v.trim();
+          await this.plugin.saveData(s);
+        })
+      );
+    new Setting(containerEl)
+      .setName("手动同步")
+      .setDesc("一般不需要：修改会自动同步。")
+      .addButton((b) =>
+        b.setButtonText("打开文件").onClick(async () => {
+          const path = this.plugin.syncPath();
+          if (!this.app.vault.getAbstractFileByPath(path)) await this.plugin.writeSyncFile();
+          const file = this.app.vault.getAbstractFileByPath(path);
+          if (file) {
+            this.app.setting?.close?.();
+            await this.app.workspace.getLeaf(true).openFile(file);
+          }
+        })
+      )
+      .addButton((b) =>
+        b.setButtonText("从文件读取").onClick(async () => {
+          this.plugin.lastSyncWrite = null;
+          await this.plugin.syncFromFile({ notify: true });
+          this.display();
+        })
+      )
+      .addButton((b) =>
+        b.setButtonText("写入文件").onClick(async () => {
+          await this.plugin.writeSyncFile();
+          new Notice("已写入设置文件");
+        })
+      );
+
     new Setting(containerEl).setName("显示").setHeading();
     toggle("显示左下角卡片", "包含「写给自己」「待办」「链接」三个页签，可在主页上切换。", "showMemo");
     new Setting(containerEl)
@@ -1472,9 +1607,9 @@ class DailyHubSettingTab extends PluginSettingTab {
       });
     new Setting(containerEl)
       .setName("待办来源目录")
-      .setDesc("「待办」页签显示这个目录里所有笔记的任务（- [ ] 格式），可以直接打勾；新加的待办写到该目录今天的笔记里。例如：项目/待办规划")
+      .setDesc("「待办」页签显示这个目录里所有笔记的任务（- [ ] 格式），可以直接打勾；新加的待办写到该目录今天的笔记里。例如：项目/待办")
       .addText((t) =>
-        t.setPlaceholder("项目/待办规划").setValue(s.todoFolder).onChange(async (v) => {
+        t.setPlaceholder("项目/待办").setValue(s.todoFolder).onChange(async (v) => {
           s.todoFolder = v.trim().replace(/^\/+|\/+$/g, "");
           await save();
         })
@@ -1550,7 +1685,8 @@ module.exports = class DailyHubPlugin extends Plugin {
         else new Notice("今天还没有日常记录");
       },
     });
-    this.addSettingTab(new DailyHubSettingTab(this.app, this));
+    this.settingTab = new DailyHubSettingTab(this.app, this);
+    this.addSettingTab(this.settingTab);
 
     let timer = null;
     const schedule = () => {
@@ -1596,7 +1732,32 @@ module.exports = class DailyHubPlugin extends Plugin {
         }
       })
     );
-    this.app.workspace.onLayoutReady(() => {
+    // 设置文件被修改（包括其他设备同步过来）时读回设置
+    let syncReadTimer = null;
+    const onSyncFileChange = (f) => {
+      if (!this.settings.syncToFile || !this.syncReady || f?.path !== this.syncPath()) return;
+      if (syncReadTimer) window.clearTimeout(syncReadTimer);
+      syncReadTimer = window.setTimeout(() => {
+        syncReadTimer = null;
+        this.syncFromFile().catch((err) => console.error("[daily-hub] sync read failed", err));
+      }, 500);
+    };
+    this.registerEvent(this.app.vault.on("modify", onSyncFileChange));
+    this.registerEvent(this.app.vault.on("create", onSyncFileChange));
+    this.register(() => {
+      if (syncReadTimer) window.clearTimeout(syncReadTimer);
+      if (this.syncTimer) window.clearTimeout(this.syncTimer);
+    });
+
+    this.app.workspace.onLayoutReady(async () => {
+      if (this.settings.syncToFile) {
+        try {
+          await this.syncFromFile({ createIfMissing: true });
+        } catch (err) {
+          console.error("[daily-hub] initial sync failed", err);
+        }
+      }
+      this.syncReady = true;
       if (this.settings.openOnStartup) this.activateView();
     });
   }
@@ -1632,10 +1793,83 @@ module.exports = class DailyHubPlugin extends Plugin {
 
   async saveSettings() {
     await this.saveData(this.settings);
+    this.scheduleSyncWrite();
     this.forEachView((v) => {
       v.buildIndex();
       v.renderAll();
     });
+  }
+
+  /* ----- 同步到笔记文件 ----- */
+
+  syncPath() {
+    const p = normalizePath((this.settings.syncFilePath || "").trim());
+    if (!p) return "";
+    return p.endsWith(".md") ? p : `${p}.md`;
+  }
+
+  syncSnapshot() {
+    const s = this.settings;
+    return JSON.stringify(SYNC_SECTIONS.map(([k]) => s[k]));
+  }
+
+  scheduleSyncWrite() {
+    if (!this.settings.syncToFile || !this.syncReady) return;
+    if (this.syncTimer) window.clearTimeout(this.syncTimer);
+    this.syncTimer = window.setTimeout(() => {
+      this.syncTimer = null;
+      this.writeSyncFile().catch((err) => console.error("[daily-hub] sync write failed", err));
+    }, 800);
+  }
+
+  async writeSyncFile() {
+    const path = this.syncPath();
+    if (!path) return;
+    const content = buildSyncFile(this.settings);
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (file) {
+      const cur = await this.app.vault.read(file);
+      // 只比较同步内容，避免无意义的改写
+      if (cur === content) return;
+      this.lastSyncWrite = content;
+      await this.app.vault.modify(file, content);
+    } else {
+      const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+      if (dir && !this.app.vault.getAbstractFileByPath(dir)) await this.app.vault.createFolder(dir);
+      this.lastSyncWrite = content;
+      await this.app.vault.create(path, content);
+    }
+  }
+
+  /** 从笔记文件读回设置；文件不存在时用当前设置创建 */
+  async syncFromFile({ createIfMissing = false, notify = false } = {}) {
+    const path = this.syncPath();
+    if (!path) return;
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!file || !("extension" in file)) {
+      if (createIfMissing) await this.writeSyncFile();
+      return;
+    }
+    const text = await this.app.vault.read(file);
+    if (text === this.lastSyncWrite) return;
+    const parsed = parseSyncFile(text);
+    if (!Object.keys(parsed).length) {
+      if (notify) new Notice("文件里没有找到同步标记，未做修改");
+      return;
+    }
+    const before = this.syncSnapshot();
+    Object.assign(this.settings, parsed);
+    if (this.syncSnapshot() === before) return;
+    await this.saveData(this.settings);
+    this.forEachView((v) => {
+      v.buildIndex();
+      v.renderAll();
+    });
+    const tab = this.settingTab;
+    if (tab && tab.containerEl && tab.containerEl.isConnected && !tab.containerEl.contains(document.activeElement)) {
+      tab.display();
+    }
+    if (notify) new Notice("已从笔记文件读取设置");
   }
 
   /* ----- projects ----- */
