@@ -78,4 +78,4 @@ MIT
 
 1. 修改 `manifest.json` 和 `versions.json` 中的版本号。
 2. 更新 `.github/release-notes.md`。
-3. 提交后推送同名标签，例如 `git tag 1.2.0 && git push origin 1.2.0`，GitHub Actions 会自动创建 Release 并附上 `main.js`、`manifest.json`、`styles.css`。
+3. 提交并推送到 `main`。GitHub Actions 发现这个版本还没有 Release 时，会自动创建同名标签和 Release，并附上 `main.js`、`manifest.json`、`styles.css`。
