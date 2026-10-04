@@ -1180,6 +1180,271 @@
   font-size: var(--font-ui-smaller);
 }
 
+/* ===== v1.2 左下角卡片 ===== */
+
+.dh-memo-card {
+  padding: 8px 8px 16px;
+}
+
+.dh-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 12px;
+  border-radius: 14px;
+  background: var(--dh-bg);
+}
+
+.dh-tab {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  font-weight: 600;
+  transition: background 0.15s, color 0.15s;
+}
+
+.dh-tab:hover {
+  color: var(--text-normal);
+}
+
+.dh-tab.is-active {
+  background: var(--dh-card);
+  color: var(--dh-accent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.dh-tab-icon {
+  display: inline-flex;
+}
+
+.dh-tab-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.dh-tab-badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--dh-accent);
+  color: var(--text-on-accent);
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.dh-tab-badge.is-empty,
+.dh-tab-badge:empty {
+  display: none;
+}
+
+.dh-side-body {
+  padding: 0 8px;
+}
+
+.dh-side-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  margin-bottom: 8px;
+}
+
+.dh-side-bar .dh-btn.is-on {
+  color: var(--dh-accent);
+}
+
+.dh-todo-src {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dh-side-empty {
+  padding: 22px 12px;
+  border: 1.5px dashed var(--dh-border);
+  border-radius: var(--dh-radius-s);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  text-align: center;
+}
+
+/* 待办 */
+.dh-todo-add {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.dh-view .dh-todo-add input {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--dh-border);
+  background: var(--dh-bg);
+  font-size: var(--font-ui-small);
+}
+
+.dh-todo-add .dh-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+}
+
+.dh-todo-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 420px;
+  overflow-y: auto;
+  margin-right: -4px;
+  padding-right: 4px;
+}
+
+.dh-todo-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dh-todo-date {
+  align-self: flex-start;
+  height: auto;
+  padding: 2px 6px;
+  margin-bottom: 2px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+}
+
+.dh-todo-date:hover {
+  background: var(--background-modifier-hover);
+  color: var(--dh-accent);
+}
+
+.dh-todo {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.dh-todo:hover {
+  background: var(--background-modifier-hover);
+}
+
+.dh-view .dh-todo input[type="checkbox"] {
+  flex-shrink: 0;
+  margin: 3px 0 0;
+  width: 17px;
+  height: 17px;
+  cursor: pointer;
+}
+
+.dh-todo-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.dh-todo-text p {
+  margin: 0;
+}
+
+.dh-todo.is-done .dh-todo-text {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+
+/* 链接 */
+.dh-links {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 8px;
+}
+
+.dh-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: auto;
+  min-height: 48px;
+  padding: 8px 10px;
+  border: 1px solid var(--dh-border);
+  border-radius: 12px;
+  background: var(--dh-bg);
+  color: var(--text-normal);
+  text-align: left;
+  transition: border-color 0.15s, transform 0.1s, background 0.15s;
+}
+
+.dh-link:hover {
+  border-color: var(--dh-accent-line);
+  background: var(--dh-accent-soft);
+}
+
+.dh-link:active {
+  transform: scale(0.97);
+}
+
+.dh-link-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: hsl(var(--dh-hue, 250) 70% 60% / 0.18);
+  color: hsl(var(--dh-hue, 250) 60% 45%);
+  font-weight: 700;
+  font-size: var(--font-ui-small);
+}
+
+.theme-dark .dh-link-avatar {
+  color: hsl(var(--dh-hue, 250) 75% 72%);
+}
+
+.dh-link-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-ui-small);
+  font-weight: 600;
+}
+
+.dh-link-setting .setting-item-info {
+  display: none;
+}
+
+.dh-link-setting .setting-item-control {
+  flex-wrap: nowrap;
+}
+
 /* ===== 窄屏 / 手机 ===== */
 
 @container dh (max-width: 860px) {
@@ -1317,6 +1582,15 @@
   }
   .dh-note-open .dh-btn-label {
     display: none;
+  }
+  .dh-tab {
+    height: 38px;
+  }
+  .dh-todo {
+    padding: 9px 8px;
+  }
+  .dh-links {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .dh-note-open {
     width: 34px;

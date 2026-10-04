@@ -1,7 +1,7 @@
 {
   "id": "daily-hub",
   "name": "Daily Hub",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "minAppVersion": "1.5.0",
   "description": "A full-page home for date notes: heatmap calendar, project timelines, quick create, AI sorting of daily notes into projects. Mobile friendly.",
   "author": "Steven Liu",

@@ -45,12 +45,33 @@ const DEFAULT_SETTINGS = {
   phoneWeekView: true,
   openOnStartup: false,
   replaceNewTabs: false,
+  aiProvider: "deepseek",
+  aiKeys: {},
   aiBaseUrl: "https://api.deepseek.com",
   aiApiKey: "",
   aiModel: "deepseek-chat",
+  sideTab: "memo",
+  todoFolder: "项目/待办",
+  showDoneTodos: false,
+  links: [],
   aiExtraPrompt: "",
   projectHints: "",
 };
+
+const AI_PROVIDERS = [
+  { id: "deepseek", name: "DeepSeek", baseUrl: "https://api.deepseek.com", model: "deepseek-chat", format: "openai" },
+  { id: "openai", name: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini", format: "openai" },
+  { id: "anthropic", name: "Claude（Anthropic）", baseUrl: "https://api.anthropic.com/v1", model: "claude-haiku-4-5-20251001", format: "anthropic" },
+  { id: "gemini", name: "Gemini（Google）", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-2.5-flash", format: "openai" },
+  { id: "moonshot", name: "Kimi（月之暗面）", baseUrl: "https://api.moonshot.cn/v1", model: "moonshot-v1-8k", format: "openai" },
+  { id: "qwen", name: "通义千问（阿里云百炼）", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-plus", format: "openai" },
+  { id: "zhipu", name: "智谱 GLM", baseUrl: "https://open.bigmodel.cn/api/paas/v4", model: "glm-4-flash", format: "openai" },
+  { id: "siliconflow", name: "硅基流动 SiliconFlow", baseUrl: "https://api.siliconflow.cn/v1", model: "deepseek-ai/DeepSeek-V3", format: "openai" },
+  { id: "openrouter", name: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", model: "openai/gpt-4o-mini", format: "openai" },
+  { id: "ollama", name: "Ollama（本地，无需 Key）", baseUrl: "http://localhost:11434/v1", model: "qwen2.5:7b", format: "openai", noKey: true },
+  { id: "custom", name: "自定义（OpenAI 兼容）", baseUrl: "", model: "", format: "openai" },
+];
+const providerOf = (id) => AI_PROVIDERS.find((p) => p.id === id) || AI_PROVIDERS[AI_PROVIDERS.length - 1];
 
 /* ---------- helpers ---------- */
 
@@ -712,29 +733,212 @@ class DailyHubView extends ItemView {
     }
   }
 
-  /* ----- memo ----- */
+  /* ----- 左下角卡片：写给自己 / 待办 / 链接 ----- */
 
   renderMemo() {
     const card = this.els.memo;
     if (!card) return;
     card.empty();
-    const memo = (this.s.memo || "").trim();
-    card.toggleClass("is-hidden", !this.s.showMemo || !memo);
-    if (!this.s.showMemo || !memo) return;
+    card.toggleClass("is-hidden", !this.s.showMemo);
+    if (!this.s.showMemo) return;
     this.disposeComponent("memoComponent");
     this.memoComponent = this.addChild(new Component());
+    const tab = ["memo", "todo", "links"].includes(this.s.sideTab) ? this.s.sideTab : "memo";
+    card.dataset.tab = tab;
 
-    const head = card.createDiv({ cls: "dh-card-head" });
-    const h = head.createDiv({ cls: "dh-memo-title" });
-    setIcon(h.createSpan({ cls: "dh-memo-icon" }), "quote");
-    h.createEl("h2", { text: "写给自己" });
-    const edit = head.createEl("button", { cls: "dh-btn dh-btn-icon-only", attr: { "aria-label": "编辑（插件设置）" } });
+    const tabs = card.createDiv({ cls: "dh-tabs" });
+    const tabDefs = [
+      ["memo", "quote", "写给自己"],
+      ["todo", "list-checks", "待办"],
+      ["links", "link", "链接"],
+    ];
+    for (const [id, icon, label] of tabDefs) {
+      const b = tabs.createEl("button", { cls: "dh-tab", attr: { "aria-label": label } });
+      b.toggleClass("is-active", id === tab);
+      setIcon(b.createSpan({ cls: "dh-tab-icon" }), icon);
+      b.createSpan({ cls: "dh-tab-label", text: label });
+      if (id === "todo") this.els.todoBadge = b.createSpan({ cls: "dh-tab-badge" });
+      b.addEventListener("click", async () => {
+        if (this.s.sideTab === id) return;
+        this.s.sideTab = id;
+        await this.plugin.saveData(this.plugin.settings);
+        this.renderMemo();
+      });
+    }
+
+    const body = card.createDiv({ cls: "dh-side-body" });
+    if (tab === "memo") this.renderMemoTab(body);
+    else if (tab === "todo") this.renderTodoTab(body);
+    else this.renderLinksTab(body);
+    if (tab !== "todo") this.updateTodoBadge();
+  }
+
+  renderMemoTab(body) {
+    const memo = (this.s.memo || "").trim();
+    const bar = body.createDiv({ cls: "dh-side-bar" });
+    bar.createDiv({ cls: "dh-muted", text: "座右铭、提醒，支持 Markdown" });
+    const edit = bar.createEl("button", { cls: "dh-btn dh-btn-icon-only", attr: { "aria-label": "编辑（插件设置）" } });
+    setIcon(edit, "pencil");
+    edit.addEventListener("click", () => this.plugin.openSettings());
+    if (!memo) {
+      body.createDiv({ cls: "dh-side-empty", text: "还没有内容，点右上角的笔去设置里写几句。" });
+      return;
+    }
+    const md = body.createDiv({ cls: "dh-memo-body markdown-rendered" });
+    MarkdownRenderer.render(this.app, memo, md, "", this.memoComponent);
+    this.bindLinks(md, "");
+  }
+
+  async collectTodos() {
+    const folder = normalizePath(this.s.todoFolder || "");
+    const files = this.app.vault
+      .getMarkdownFiles()
+      .filter((f) => folder && (f.path.startsWith(`${folder}/`) || f.parent?.path === folder));
+    files.sort((a, b) => b.basename.localeCompare(a.basename, "zh-CN"));
+    const groups = [];
+    for (const file of files) {
+      const cache = this.app.metadataCache.getFileCache(file);
+      const items = (cache?.listItems || []).filter((li) => li.task !== undefined);
+      if (!items.length) continue;
+      const lines = (await this.app.vault.cachedRead(file)).split("\n");
+      const tasks = [];
+      for (const li of items) {
+        const line = li.position.start.line;
+        const raw = lines[line] || "";
+        const m = raw.match(/^\s*(?:[-*+]|\d+[.)])\s+\[(.)\]\s?(.*)$/);
+        if (!m) continue;
+        tasks.push({ file, line, raw, done: m[1] !== " ", text: m[2] });
+      }
+      if (tasks.length) groups.push({ file, tasks });
+    }
+    return groups;
+  }
+
+  async updateTodoBadge(groups) {
+    const badge = this.els.todoBadge;
+    if (!badge) return;
+    const g = groups || (await this.collectTodos());
+    const n = g.reduce((sum, x) => sum + x.tasks.filter((t) => !t.done).length, 0);
+    badge.setText(n ? String(n) : "");
+    badge.toggleClass("is-empty", !n);
+  }
+
+  async renderTodoTab(body) {
+    const folder = normalizePath(this.s.todoFolder || "");
+    const bar = body.createDiv({ cls: "dh-side-bar" });
+    const src = bar.createDiv({ cls: "dh-muted dh-todo-src", text: `来自「${folder || "未设置"}」` });
+    src.setAttr("title", "在插件设置中修改待办来源目录");
+    const showDone = bar.createEl("button", {
+      cls: "dh-btn dh-btn-icon-only",
+      attr: { "aria-label": this.s.showDoneTodos ? "隐藏已完成" : "显示已完成" },
+    });
+    setIcon(showDone, this.s.showDoneTodos ? "eye" : "eye-off");
+    showDone.toggleClass("is-on", this.s.showDoneTodos);
+    showDone.addEventListener("click", async () => {
+      this.s.showDoneTodos = !this.s.showDoneTodos;
+      await this.plugin.saveData(this.plugin.settings);
+      this.renderMemo();
+    });
+
+    // 添加待办：写到待办目录里今天的笔记
+    const add = body.createDiv({ cls: "dh-todo-add" });
+    const input = add.createEl("input", { attr: { type: "text", placeholder: "添加待办，回车保存到今天…" } });
+    const addBtn = add.createEl("button", { cls: "dh-btn dh-btn-soft dh-btn-icon-only", attr: { "aria-label": "添加" } });
+    setIcon(addBtn, "plus");
+    const submit = async () => {
+      const text = input.value.trim();
+      if (!text || !folder) return;
+      input.disabled = true;
+      try {
+        await this.plugin.addTodo(text);
+        input.value = "";
+        this.renderMemo();
+      } catch (err) {
+        new Notice(`添加失败：${err.message || err}`);
+      } finally {
+        input.disabled = false;
+      }
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.isComposing) submit();
+    });
+    addBtn.addEventListener("click", submit);
+
+    const listEl = body.createDiv({ cls: "dh-todo-list" });
+    if (!folder || !isFolder(this.app.vault.getAbstractFileByPath(folder))) {
+      listEl.createDiv({ cls: "dh-side-empty", text: `找不到目录「${folder}」，请在插件设置里修改待办来源目录。` });
+      return;
+    }
+    const token = (this.todoToken = (this.todoToken || 0) + 1);
+    const groups = await this.collectTodos();
+    if (token !== this.todoToken) return;
+    this.updateTodoBadge(groups);
+
+    let shown = 0;
+    for (const g of groups) {
+      const tasks = this.s.showDoneTodos ? g.tasks : g.tasks.filter((t) => !t.done);
+      if (!tasks.length) continue;
+      const sec = listEl.createDiv({ cls: "dh-todo-group" });
+      const gh = sec.createEl("button", { cls: "dh-todo-date", attr: { "aria-label": `打开 ${g.file.basename}` } });
+      gh.setText(DATE_NAME_PATTERN.test(g.file.basename) ? shortDate(g.file.basename) : g.file.basename);
+      gh.addEventListener("click", (evt) => this.openFile(g.file, evt));
+      for (const t of tasks) {
+        const row = sec.createEl("label", { cls: "dh-todo" });
+        row.toggleClass("is-done", t.done);
+        const cb = row.createEl("input", { cls: "task-list-item-checkbox", attr: { type: "checkbox" } });
+        cb.checked = t.done;
+        const txt = row.createSpan({ cls: "dh-todo-text" });
+        MarkdownRenderer.render(this.app, t.text || " ", txt, t.file.path, this.memoComponent).then(() => {
+          const p = txt.querySelector("p");
+          if (p && txt.childElementCount === 1) p.replaceWith(...p.childNodes);
+        });
+        this.bindLinks(txt, t.file.path);
+        cb.addEventListener("change", async () => {
+          row.toggleClass("is-done", cb.checked);
+          try {
+            await this.plugin.setTaskDone(t, cb.checked);
+          } catch (err) {
+            cb.checked = !cb.checked;
+            row.toggleClass("is-done", cb.checked);
+            new Notice(`更新失败：${err.message || err}`);
+          }
+        });
+        shown += 1;
+      }
+    }
+    if (!shown) {
+      listEl.createDiv({
+        cls: "dh-side-empty",
+        text: this.s.showDoneTodos ? "这个目录里还没有待办。" : "没有未完成的待办 🎉",
+      });
+    }
+  }
+
+  renderLinksTab(body) {
+    const bar = body.createDiv({ cls: "dh-side-bar" });
+    bar.createDiv({ cls: "dh-muted", text: "常用链接" });
+    const actions = bar.createDiv({ cls: "dh-head-actions" });
+    const add = actions.createEl("button", { cls: "dh-btn dh-btn-icon-only", attr: { "aria-label": "添加链接" } });
+    setIcon(add, "plus");
+    add.addEventListener("click", () => new LinkModal(this.app, this.plugin).open());
+    const edit = actions.createEl("button", { cls: "dh-btn dh-btn-icon-only", attr: { "aria-label": "管理链接（插件设置）" } });
     setIcon(edit, "pencil");
     edit.addEventListener("click", () => this.plugin.openSettings());
 
-    const body = card.createDiv({ cls: "dh-memo-body markdown-rendered" });
-    MarkdownRenderer.render(this.app, memo, body, "", this.memoComponent);
-    this.bindLinks(body, "");
+    const links = (this.s.links || []).filter((l) => l && l.url);
+    if (!links.length) {
+      body.createDiv({ cls: "dh-side-empty", text: "还没有链接。点 + 添加，或在插件设置里管理。" });
+      return;
+    }
+    const grid = body.createDiv({ cls: "dh-links" });
+    links.forEach((l, i) => {
+      const name = (l.name || "").trim() || "未命名链接";
+      const btn = grid.createEl("button", { cls: "dh-link", attr: { "aria-label": name } });
+      const av = btn.createSpan({ cls: "dh-link-avatar", text: Array.from(name)[0].toUpperCase() });
+      av.style.setProperty("--dh-hue", String((i * 47 + name.charCodeAt(0) * 13) % 360));
+      btn.createSpan({ cls: "dh-link-name", text: name });
+      btn.addEventListener("click", (evt) => this.plugin.openLink(l.url, evt));
+    });
   }
 
   /* ----- day: filters + notes ----- */
@@ -887,8 +1091,9 @@ class DailyHubView extends ItemView {
 
   async runAi(recordFile) {
     if (this.aiBusy) return;
-    if (!this.s.aiApiKey) {
-      new Notice("请先在 Daily Hub 设置里填写 AI 接口的 API Key");
+    const prov = providerOf(this.s.aiProvider);
+    if (!prov.noKey && !this.plugin.currentAiKey()) {
+      new Notice(`请先在插件设置里填写 ${prov.name} 的 API Key`);
       this.plugin.openSettings();
       return;
     }
@@ -970,6 +1175,46 @@ class NewProjectModal extends Modal {
       if (e.key === "Enter" && !e.isComposing) submit();
     });
     window.setTimeout(() => input.focus(), 50);
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+class LinkModal extends Modal {
+  constructor(app, plugin) {
+    super(app);
+    this.plugin = plugin;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    this.modalEl.addClass("dh-modal");
+    if (this.setTitle) this.setTitle("添加链接");
+    else contentEl.createEl("h3", { text: "添加链接" });
+    const name = contentEl.createEl("input", { cls: "dh-input", attr: { type: "text", placeholder: "名称，例如：课程表" } });
+    const url = contentEl.createEl("input", { cls: "dh-input", attr: { type: "text", placeholder: "地址，例如：https://example.com" } });
+    contentEl.createDiv({ cls: "dh-muted", text: "主页上只显示名称。地址不带 https:// 时会当作库里的笔记名打开。" });
+    const row = contentEl.createDiv({ cls: "dh-modal-actions" });
+    row.createEl("button", { text: "取消" }).addEventListener("click", () => this.close());
+    const ok = row.createEl("button", { cls: "mod-cta", text: "添加" });
+    const submit = async () => {
+      let u = url.value.trim();
+      const n = name.value.trim();
+      if (!u) return;
+      if (/^www\./i.test(u)) u = `https://${u}`;
+      this.plugin.settings.links = [...(this.plugin.settings.links || []), { name: n || u, url: u }];
+      await this.plugin.saveSettings();
+      this.close();
+    };
+    ok.addEventListener("click", submit);
+    for (const el of [name, url]) {
+      el.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.isComposing) submit();
+      });
+    }
+    window.setTimeout(() => name.focus(), 50);
   }
 
   onClose() {
@@ -1097,9 +1342,9 @@ class DailyHubSettingTab extends PluginSettingTab {
     text("项目根目录", "该目录下的子目录会作为项目。", "projectRoot");
     new Setting(containerEl)
       .setName("忽略的文件夹名")
-      .setDesc("这些名字的文件夹不算项目，用逗号分隔。")
+      .setDesc("这些名字的文件夹不算项目，只写文件夹名、用逗号分隔，例如：attachments, assets, 附件")
       .addText((t) =>
-        t.setValue(s.ignoredFolderNames.join(", ")).onChange(async (v) => {
+        t.setPlaceholder("attachments, assets, 附件").setValue(s.ignoredFolderNames.join(", ")).onChange(async (v) => {
           s.ignoredFolderNames = v.split(/[,，]/).map((x) => x.trim()).filter(Boolean);
           await save();
         })
@@ -1115,29 +1360,80 @@ class DailyHubSettingTab extends PluginSettingTab {
       );
     new Setting(containerEl)
       .setName("排除的目录")
-      .setDesc("每行一个路径前缀，其中的日期笔记不会显示。")
+      .setDesc(
+        createFragment((f) => {
+          f.appendText("这些目录里的日期笔记不会出现在主页上。每行写一个，从库的根目录开始写，用 / 分隔，开头不加 /。");
+          f.createEl("br");
+          f.appendText("例如：");
+          f.createEl("code", { text: "99_归档/" });
+          f.appendText(" 排除整个归档文件夹；");
+          f.createEl("code", { text: "项目/旧项目/" });
+          f.appendText(" 只排除某个项目；");
+          f.createEl("code", { text: "templates/" });
+          f.appendText(" 排除模板。结尾的 / 建议保留，避免误伤同名开头的其他文件夹。");
+        })
+      )
       .addTextArea((t) => {
         t.inputEl.rows = 4;
-        t.setValue(s.excludedFolderPrefixes.join("\n")).onChange(async (v) => {
+        t.inputEl.style.width = "100%";
+        t.setPlaceholder("99_归档/\n项目/旧项目/\ntemplates/").setValue(s.excludedFolderPrefixes.join("\n")).onChange(async (v) => {
           s.excludedFolderPrefixes = v.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
           await save();
         });
       });
 
     new Setting(containerEl).setName("AI 识别").setHeading();
-    containerEl.createDiv({
-      cls: "setting-item-description",
-      text: "使用 OpenAI 兼容接口（默认 DeepSeek）。注意：API Key 保存在本插件的 data.json 中，会随库一起同步。",
-    });
-    text("接口地址", "例如 https://api.deepseek.com 或 https://api.openai.com/v1", "aiBaseUrl", "https://api.deepseek.com");
-    new Setting(containerEl).setName("API Key").addText((t) => {
-      t.inputEl.type = "password";
-      t.setPlaceholder("sk-...").setValue(s.aiApiKey).onChange(async (v) => {
-        s.aiApiKey = v.trim();
-        await save();
+    const prov = providerOf(s.aiProvider);
+    new Setting(containerEl)
+      .setName("AI 服务")
+      .setDesc("切换服务时会自动填入对应的接口地址和推荐模型；每个服务的 API Key 分开保存。")
+      .addDropdown((d) => {
+        for (const p of AI_PROVIDERS) d.addOption(p.id, p.name);
+        d.setValue(prov.id).onChange(async (v) => {
+          const np = providerOf(v);
+          s.aiProvider = np.id;
+          if (np.id !== "custom") {
+            s.aiBaseUrl = np.baseUrl;
+            s.aiModel = np.model;
+          }
+          await save();
+          this.display();
+        });
       });
-    });
-    text("模型", "DeepSeek 用 deepseek-chat 即可。", "aiModel", "deepseek-chat");
+    if (!prov.noKey) {
+      new Setting(containerEl)
+        .setName(`${prov.name} API Key`)
+        .setDesc("保存在本插件的 data.json 中，会随库一起同步，不要把它提交到公开仓库。")
+        .addText((t) => {
+          t.inputEl.type = "password";
+          t.setPlaceholder(prov.format === "anthropic" ? "sk-ant-..." : "sk-...")
+            .setValue((s.aiKeys || {})[prov.id] || "")
+            .onChange(async (v) => {
+              s.aiKeys = { ...(s.aiKeys || {}), [prov.id]: v.trim() };
+              await save();
+            });
+        });
+    }
+    text("接口地址", prov.id === "custom" ? "填写 OpenAI 兼容接口的地址，例如 https://example.com/v1" : `默认 ${prov.baseUrl}，一般不用改。`, "aiBaseUrl", prov.baseUrl);
+    text("模型", `推荐 ${prov.model || "按服务商文档填写"}，也可以换成该服务支持的其他模型。`, "aiModel", prov.model);
+    new Setting(containerEl)
+      .setName("测试连接")
+      .setDesc("发送一句很短的测试请求，检查 Key、地址和模型是否可用。")
+      .addButton((btn) =>
+        btn.setButtonText("测试").onClick(async () => {
+          btn.setDisabled(true);
+          btn.setButtonText("测试中…");
+          try {
+            const out = await this.plugin.callAi("只回复 JSON。", '回复 {"ok":true}');
+            new Notice(`连接成功：${String(out).slice(0, 60)}`);
+          } catch (err) {
+            new Notice(`连接失败：${err.message || err}`, 8000);
+          } finally {
+            btn.setDisabled(false);
+            btn.setButtonText("测试");
+          }
+        })
+      );
     new Setting(containerEl)
       .setName("项目说明")
       .setDesc("可选，每行「项目名: 说明」，帮助 AI 更准确地判断归属。例如：记账: 花钱、收入、价格")
@@ -1162,7 +1458,7 @@ class DailyHubSettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl).setName("显示").setHeading();
-    toggle("显示「写给自己」卡片", "", "showMemo");
+    toggle("显示左下角卡片", "包含「写给自己」「待办」「链接」三个页签，可在主页上切换。", "showMemo");
     new Setting(containerEl)
       .setName("「写给自己」内容")
       .setDesc("支持 Markdown。")
@@ -1174,6 +1470,58 @@ class DailyHubSettingTab extends PluginSettingTab {
           await save();
         });
       });
+    new Setting(containerEl)
+      .setName("待办来源目录")
+      .setDesc("「待办」页签显示这个目录里所有笔记的任务（- [ ] 格式），可以直接打勾；新加的待办写到该目录今天的笔记里。例如：项目/待办规划")
+      .addText((t) =>
+        t.setPlaceholder("项目/待办规划").setValue(s.todoFolder).onChange(async (v) => {
+          s.todoFolder = v.trim().replace(/^\/+|\/+$/g, "");
+          await save();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("常用链接")
+      .setDesc("「链接」页签里显示的网址。主页上只显示名称，点击后打开地址。地址不带 https:// 时当作库里的笔记名。")
+      .addButton((b) =>
+        b.setButtonText("添加链接").onClick(async () => {
+          s.links = [...(s.links || []), { name: "", url: "" }];
+          await this.plugin.saveData(s);
+          this.display();
+        })
+      );
+    (s.links || []).forEach((link, i) => {
+      const row = new Setting(containerEl).setClass("dh-link-setting");
+      row.addText((t) =>
+        t.setPlaceholder("名称").setValue(link.name || "").onChange(async (v) => {
+          link.name = v.trim();
+          await save();
+        })
+      );
+      row.addText((t) => {
+        t.inputEl.style.width = "100%";
+        t.setPlaceholder("https://...").setValue(link.url || "").onChange(async (v) => {
+          link.url = v.trim();
+          await save();
+        });
+      });
+      row.addExtraButton((b) =>
+        b.setIcon("arrow-up").setTooltip("上移").setDisabled(i === 0).onClick(async () => {
+          const arr = s.links;
+          [arr[i - 1], arr[i]] = [arr[i], arr[i - 1]];
+          await save();
+          this.display();
+        })
+      );
+      row.addExtraButton((b) =>
+        b.setIcon("trash-2").setTooltip("删除").onClick(async () => {
+          s.links = s.links.filter((_, j) => j !== i);
+          await save();
+          this.display();
+        })
+      );
+    });
+
     toggle("长笔记折叠", "超过一定高度的笔记先显示一部分。", "clampLongNotes");
     toggle("手机默认周视图", "在手机上打开时，日历默认收起为一周。", "phoneWeekView");
     toggle("启动时打开主页", "", "openOnStartup");
@@ -1228,6 +1576,19 @@ module.exports = class DailyHubPlugin extends Plugin {
         if (shown) schedule();
       })
     );
+    let todoTimer = null;
+    this.registerEvent(
+      this.app.metadataCache.on("changed", (file) => {
+        const folder = normalizePath(this.settings.todoFolder || "");
+        if (!folder || !file.path.startsWith(`${folder}/`)) return;
+        if (todoTimer) window.clearTimeout(todoTimer);
+        todoTimer = window.setTimeout(() => {
+          todoTimer = null;
+          this.forEachView((v) => (this.settings.sideTab === "todo" ? v.renderMemo() : v.updateTodoBadge()));
+        }, 500);
+      })
+    );
+    this.register(() => todoTimer && window.clearTimeout(todoTimer));
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", (leaf) => {
         if (leaf && this.settings.replaceNewTabs && leaf.getViewState().type === "empty") {
@@ -1258,9 +1619,15 @@ module.exports = class DailyHubPlugin extends Plugin {
 
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, (await this.loadData()) || {});
-    for (const k of ["excludedFolderPrefixes", "projectOrder", "archivedProjects", "ignoredFolderNames"]) {
+    for (const k of ["excludedFolderPrefixes", "projectOrder", "archivedProjects", "ignoredFolderNames", "links"]) {
       if (!Array.isArray(this.settings[k])) this.settings[k] = [...DEFAULT_SETTINGS[k]];
     }
+    if (!this.settings.aiKeys || typeof this.settings.aiKeys !== "object") this.settings.aiKeys = {};
+    // 旧版只有一个 Key：归到 DeepSeek
+    if (this.settings.aiApiKey && !this.settings.aiKeys.deepseek) {
+      this.settings.aiKeys.deepseek = this.settings.aiApiKey;
+    }
+    this.settings.aiApiKey = "";
   }
 
   async saveSettings() {
@@ -1402,33 +1769,7 @@ module.exports = class DailyHubPlugin extends Plugin {
       daily.slice(0, 12000),
     ].join("\n");
 
-    const base = (s.aiBaseUrl || DEFAULT_SETTINGS.aiBaseUrl).replace(/\/+$/, "");
-    const url = /\/chat\/completions$/.test(base) ? base : `${base}/chat/completions`;
-    const res = await requestUrl({
-      url,
-      method: "POST",
-      throw: false,
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${s.aiApiKey}` },
-      body: JSON.stringify({
-        model: s.aiModel || DEFAULT_SETTINGS.aiModel,
-        temperature: 0.2,
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-      }),
-    });
-    if (res.status >= 400) {
-      let msg = "";
-      try {
-        msg = res.json?.error?.message || "";
-      } catch (e) {
-        msg = "";
-      }
-      throw new Error(`接口返回 ${res.status}${msg ? `：${msg}` : ""}`);
-    }
-    const content = res.json?.choices?.[0]?.message?.content || "";
+    const content = await this.callAi(system, user);
     const parsed = parseJsonLoose(content);
     const byLabel = new Map(projects.map((p) => [p.label, p]));
     const byLoose = new Map(projects.map((p) => [p.label.replace(/\s/g, ""), p]));
@@ -1443,6 +1784,117 @@ module.exports = class DailyHubPlugin extends Plugin {
       else merged.set(p.path, { path: p.path, label: p.label, summary, reason: String(it.reason || "").trim() });
     }
     return [...merged.values()];
+  }
+
+  currentAiKey() {
+    const s = this.settings;
+    return ((s.aiKeys && s.aiKeys[s.aiProvider]) || "").trim();
+  }
+
+  async callAi(system, user) {
+    const s = this.settings;
+    const prov = providerOf(s.aiProvider);
+    const key = this.currentAiKey();
+    const base = (s.aiBaseUrl || prov.baseUrl || "").trim().replace(/\/+$/, "");
+    const model = (s.aiModel || prov.model || "").trim();
+    if (!base) throw new Error("请先在设置里填写接口地址");
+    if (!model) throw new Error("请先在设置里填写模型名称");
+    const errMsg = (res) => {
+      let msg = "";
+      try {
+        msg = res.json?.error?.message || res.json?.message || "";
+      } catch (e) {
+        msg = "";
+      }
+      return `${prov.name} 返回 ${res.status}${msg ? `：${msg}` : ""}`;
+    };
+
+    if (prov.format === "anthropic") {
+      const res = await requestUrl({
+        url: `${base}/messages`,
+        method: "POST",
+        throw: false,
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": key,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: 2048,
+          temperature: 0.2,
+          system,
+          messages: [{ role: "user", content: user }],
+        }),
+      });
+      if (res.status >= 400) throw new Error(errMsg(res));
+      return (res.json?.content || []).map((c) => c.text || "").join("");
+    }
+
+    const url = /\/chat\/completions$/.test(base) ? base : `${base}/chat/completions`;
+    const headers = { "Content-Type": "application/json" };
+    if (key) headers.Authorization = `Bearer ${key}`;
+    const send = (jsonMode) =>
+      requestUrl({
+        url,
+        method: "POST",
+        throw: false,
+        headers,
+        body: JSON.stringify({
+          model,
+          temperature: 0.2,
+          ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
+          messages: [
+            { role: "system", content: system },
+            { role: "user", content: user },
+          ],
+        }),
+      });
+    let res = await send(true);
+    // 部分服务不支持 JSON 模式，去掉后重试一次
+    if (res.status === 400 || res.status === 422) res = await send(false);
+    if (res.status >= 400) throw new Error(errMsg(res));
+    return res.json?.choices?.[0]?.message?.content || "";
+  }
+
+  /* ----- 待办与链接 ----- */
+
+  async setTaskDone(task, done) {
+    await this.app.vault.process(task.file, (text) => {
+      const lines = text.split("\n");
+      let idx = task.line;
+      if (lines[idx] !== task.raw) idx = lines.indexOf(task.raw);
+      if (idx === -1) throw new Error("这条待办在笔记里已被修改，请刷新后再试");
+      lines[idx] = lines[idx].replace(/^(\s*(?:[-*+]|\d+[.)])\s+\[)(.)(\])/, `$1${done ? "x" : " "}$3`);
+      task.raw = lines[idx];
+      task.line = idx;
+      return lines.join("\n");
+    });
+  }
+
+  async addTodo(text) {
+    const folder = normalizePath(this.settings.todoFolder);
+    if (!isFolder(this.app.vault.getAbstractFileByPath(folder))) await this.app.vault.createFolder(folder);
+    const path = normalizePath(`${folder}/${keyOf(new Date())}.md`);
+    const line = `- [ ] ${text}`;
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!file) await this.app.vault.create(path, `${line}\n`);
+    else
+      await this.app.vault.process(file, (t) => {
+        const trimmed = t.replace(/\s+$/, "");
+        return `${trimmed}${trimmed ? "\n" : ""}${line}\n`;
+      });
+  }
+
+  openLink(url, evt) {
+    const u = String(url || "").trim();
+    if (!u) return;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(u)) {
+      window.open(u, "_blank");
+      return;
+    }
+    // 没有协议的当作库内笔记
+    this.app.workspace.openLinkText(u.replace(/^\[\[|\]\]$/g, ""), "", Keymap.isModEvent(evt));
   }
 
   async writeAiItems(date, recordFile, items) {
