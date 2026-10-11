@@ -204,6 +204,163 @@ function stripAiBlock(text) {
   return (text.slice(0, s) + text.slice(e + AI_END.length)).trim();
 }
 
+/* ---------- 日常记录：按上午 / 下午 / 晚上整理的时间线 ---------- */
+
+const PERIODS = [
+  { key: "上午", from: 0, to: 12 * 60, icon: "sunrise" },
+  { key: "下午", from: 12 * 60, to: 18 * 60, icon: "sun" },
+  { key: "晚上", from: 18 * 60, to: 24 * 60, icon: "moon" },
+];
+const PERIOD_HEAD_RE = /^(#{1,6})\s*(上午|下午|晚上)\s*$/;
+const ENTRY_RE = /^[-*+]\s+(\d{1,2})[:：](\d{2})(?:\s+(.*))?$/;
+
+const periodOf = (min) => PERIODS.find((p) => min >= p.from && min < p.to) || PERIODS[2];
+const fmtTime = (min) => `${pad(Math.floor(min / 60))}:${pad(min % 60)}`;
+const parseTime = (str) => {
+  const m = String(str || "").match(/^(\d{1,2})[:：](\d{2})$/);
+  if (!m || +m[1] > 23 || +m[2] > 59) return null;
+  return +m[1] * 60 + +m[2];
+};
+
+function splitFrontmatter(text) {
+  const m = text.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
+  return m ? [m[0], text.slice(m[0].length)] : ["", text];
+}
+
+/** 取出所有「- HH:mm 内容」条目（含缩进的续行），返回剩余行与条目 */
+function extractEntries(lines) {
+  const rest = [];
+  const entries = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const m = lines[i].match(ENTRY_RE);
+    if (m && +m[1] < 24 && +m[2] < 60) {
+      const raw = [lines[i]];
+      while (i + 1 < lines.length && /^\s+\S/.test(lines[i + 1])) {
+        i += 1;
+        raw.push(lines[i]);
+      }
+      const min = +m[1] * 60 + +m[2];
+      const text = [m[3] || "", ...raw.slice(1).map((l) => l.replace(/^(\t| {1,4})/, ""))].join("\n").trim();
+      entries.push({ min, time: fmtTime(min), text, raw: raw.join("\n") });
+    } else {
+      rest.push(lines[i]);
+    }
+  }
+  return { rest, entries };
+}
+
+function entryToLines(min, text) {
+  const parts = String(text).replace(/\r/g, "").trim().split("\n");
+  return [`- ${fmtTime(min)} ${parts[0]}`, ...parts.slice(1).map((l) => (l.trim() ? `  ${l}` : "  "))];
+}
+
+/**
+ * 整理日常记录：把所有带时间的条目按时间归入「上午 / 下午 / 晚上」标题下并排序。
+ * 其他文字保持原位不动。add: 要新增的条目；removeRaw: 要删除的条目原文。
+ */
+function organizeDaily(text, { add = [], removeRaw = null, addText = null } = {}) {
+  const [fm, body] = splitFrontmatter(text || "");
+  const { rest, entries } = extractEntries(body.split(/\r?\n/));
+  if (removeRaw !== null) {
+    const i = entries.findIndex((e) => e.raw === removeRaw);
+    if (i >= 0) entries.splice(i, 1);
+  }
+  for (const a of add) entries.push({ min: a.min, lines: entryToLines(a.min, a.text) });
+  entries.sort((a, b) => a.min - b.min);
+
+  const lines = rest;
+  const headIndex = (key) => lines.findIndex((l) => (l.match(PERIOD_HEAD_RE) || [])[2] === key);
+  // 缺少的时段标题按 上午→下午→晚上 的顺序补上
+  for (const [pi, p] of PERIODS.entries()) {
+    const needed = entries.some((e) => periodOf(e.min) === p) || (addText && addText.key === p.key);
+    if (!needed || headIndex(p.key) !== -1) continue;
+    const later = PERIODS.slice(pi + 1).map((q) => headIndex(q.key)).filter((i) => i !== -1);
+    const heading = `## ${p.key}`;
+    if (later.length) lines.splice(Math.min(...later), 0, heading, "");
+    else lines.push("", heading, "");
+  }
+  // 从后往前插入，避免下标错位
+  const order = PERIODS.map((p) => ({ p, idx: headIndex(p.key) }))
+    .filter((x) => x.idx !== -1)
+    .sort((a, b) => b.idx - a.idx);
+  for (const { p, idx } of order) {
+    const block = entries
+      .filter((e) => periodOf(e.min) === p)
+      .flatMap((e) => e.lines || e.raw.split("\n"));
+    if (!block.length) continue;
+    // 放在该时段末尾（下一个同级或更高级标题之前），原有文字保持在前
+    const level = lines[idx].match(PERIOD_HEAD_RE)[1].length;
+    let end = idx + 1;
+    while (end < lines.length) {
+      const hm = lines[end].match(/^(#{1,6})\s/);
+      if (hm && (hm[1].length <= level || PERIOD_HEAD_RE.test(lines[end]))) break;
+      end += 1;
+    }
+    while (end > idx + 1 && !lines[end - 1].trim()) end -= 1;
+    lines.splice(end, 0, "", ...block, "");
+  }
+  // 不带时间的文字：指定时段就放到该时段末尾，否则放在所有时段之前
+  if (addText && String(addText.text).trim()) {
+    const block = String(addText.text).replace(/\r/g, "").replace(/\s+$/, "").split("\n");
+    if (addText.key) {
+      const idx = headIndex(addText.key);
+      const level = lines[idx].match(PERIOD_HEAD_RE)[1].length;
+      let end = idx + 1;
+      while (end < lines.length) {
+        const hm = lines[end].match(/^(#{1,6})\s/);
+        if (hm && (hm[1].length <= level || PERIOD_HEAD_RE.test(lines[end]))) break;
+        end += 1;
+      }
+      while (end > idx + 1 && !lines[end - 1].trim()) end -= 1;
+      lines.splice(end, 0, "", ...block, "");
+    } else {
+      const first = lines.findIndex((l) => PERIOD_HEAD_RE.test(l));
+      if (first === -1) lines.push("", ...block, "");
+      else lines.splice(first, 0, ...block, "");
+    }
+  }
+  // 合并多余空行
+  const out = [];
+  for (const l of lines) {
+    if (!l.trim() && out.length && !out[out.length - 1].trim()) continue;
+    out.push(l.trim() ? l : "");
+  }
+  while (out.length && !out[0].trim()) out.shift();
+  while (out.length && !out[out.length - 1].trim()) out.pop();
+  return `${fm}${out.join("\n")}\n`;
+}
+
+/** 解析日常记录用于展示时间线 */
+function parseDaily(text) {
+  const [, body] = splitFrontmatter(text || "");
+  const buckets = { other: [] };
+  for (const p of PERIODS) buckets[p.key] = [];
+  let cur = "other";
+  let curLevel = 0;
+  for (const line of body.split(/\r?\n/)) {
+    const pm = line.match(PERIOD_HEAD_RE);
+    if (pm) {
+      cur = pm[2];
+      curLevel = pm[1].length;
+      continue;
+    }
+    const hm = line.match(/^(#{1,6})\s/);
+    if (hm && cur !== "other" && hm[1].length <= curLevel) cur = "other";
+    buckets[cur].push(line);
+  }
+  const result = { other: "", periods: PERIODS.map((p) => ({ ...p, entries: [], extra: "" })) };
+  const otherParsed = extractEntries(buckets.other);
+  result.other = otherParsed.rest.join("\n").trim();
+  for (const e of otherParsed.entries) result.periods.find((p) => p.key === periodOf(e.min).key).entries.push(e);
+  for (const per of result.periods) {
+    const parsed = extractEntries(buckets[per.key]);
+    per.entries.push(...parsed.entries);
+    per.entries.sort((a, b) => a.min - b.min);
+    per.extra = parsed.rest.join("\n").trim();
+  }
+  return result;
+}
+
 /* ---------- view ---------- */
 
 class DailyHubView extends ItemView {
@@ -246,6 +403,7 @@ class DailyHubView extends ItemView {
   async onClose() {
     this.disposeComponent("notesComponent");
     this.disposeComponent("memoComponent");
+    this.disposeComponent("journalComponent");
   }
 
   disposeComponent(name) {
@@ -669,7 +827,7 @@ class DailyHubView extends ItemView {
       cls: "dh-card-sub",
       text: this.manage
         ? "调整顺序（常用的往前）、存档不再使用的项目"
-        : `创建或打开 ${d.getMonth() + 1} 月 ${d.getDate()} 日（${WEEKDAY_FULL[d.getDay()]}）的日期笔记`,
+        : `点按钮直接在弹窗里记录 ${d.getMonth() + 1} 月 ${d.getDate()} 日（${WEEKDAY_FULL[d.getDay()]}）的内容，Ctrl / ⌘ + 点击打开笔记`,
     });
     const actions = head.createDiv({ cls: "dh-head-actions" });
     const addBtn = actions.createEl("button", { cls: "dh-btn dh-btn-soft", attr: { "aria-label": "新建项目" } });
@@ -745,18 +903,41 @@ class DailyHubView extends ItemView {
     btn.createSpan({ cls: "dh-launch-label", text: p.label });
     btn.addEventListener("click", async (evt) => {
       if (btn.hasClass("is-busy")) return;
-      btn.addClass("is-busy");
-      try {
-        let file = this.app.vault.getAbstractFileByPath(path);
-        if (!file) file = await this.app.vault.create(path, "");
-        await this.openFile(file, evt);
-      } catch (err) {
-        console.error("[daily-hub] launch failed", err);
-        new Notice(`无法打开或创建：${path}`);
-      } finally {
-        btn.removeClass("is-busy");
+      // Ctrl / Cmd + 点击：仍然直接打开笔记
+      if (Keymap.isModEvent(evt)) {
+        btn.addClass("is-busy");
+        try {
+          let file = this.app.vault.getAbstractFileByPath(path);
+          if (!file) file = await this.app.vault.create(path, "");
+          await this.openFile(file, evt);
+        } catch (err) {
+          console.error("[daily-hub] launch failed", err);
+          new Notice(`无法打开或创建：${path}`);
+        } finally {
+          btn.removeClass("is-busy");
+        }
+        return;
       }
+      this.openRecordModal(p);
     });
+  }
+
+  openRecordModal(project, entry = null) {
+    new RecordModal(this.app, this.plugin, {
+      date: this.selectedDate,
+      project,
+      entry,
+      onDone: () => this.refresh(),
+    }).open();
+  }
+
+  recordProject() {
+    return this.projects().find((p) => p.isRecord) || {
+      path: normalizePath(this.s.dateRecordFolder),
+      label: this.s.dateRecordFolder,
+      isRecord: true,
+      archived: false,
+    };
   }
 
   renderManageList(card, projects) {
@@ -1037,7 +1218,10 @@ class DailyHubView extends ItemView {
     if (!el) return;
     el.empty();
     const files = this.filesByDate.get(this.selectedDate) || [];
+    const recordPath = normalizePath(this.s.dateRecordFolder);
     const groups = this.groupFiles(files);
+    groups.delete(recordPath); // 日常记录单独以时间线展示
+    const otherCount = [...groups.values()].reduce((n, g) => n + g.files.length, 0);
     const sel = this.selectionFor(this.selectedDate, groups);
     const d = parseKey(this.selectedDate);
 
@@ -1059,6 +1243,10 @@ class DailyHubView extends ItemView {
     }
     this.els.dayCount = right.createDiv({ cls: "dh-pill" });
 
+    this.els.journal = el.createEl("section", { cls: "dh-card dh-journal" });
+    this.renderJournal();
+
+    if (otherCount) el.createDiv({ cls: "dh-subhead", text: "其他项目" });
     this.els.filters = el.createDiv({ cls: "dh-chip-row dh-filter-row" });
     this.els.notes = el.createDiv({ cls: "dh-notes" });
 
@@ -1087,7 +1275,98 @@ class DailyHubView extends ItemView {
       this.els.filters.remove();
     }
 
-    this.renderNotes(groups, sel, files.length);
+    this.renderNotes(groups, sel, otherCount);
+  }
+
+  async renderJournal() {
+    const card = this.els.journal;
+    if (!card) return;
+    const token = (this.journalToken = (this.journalToken || 0) + 1);
+    const file = this.recordFileFor(this.selectedDate);
+    const text = file && "extension" in file ? await this.app.vault.cachedRead(file) : "";
+    if (token !== this.journalToken) return;
+    card.empty();
+    this.disposeComponent("journalComponent");
+    this.journalComponent = this.addChild(new Component());
+    const comp = this.journalComponent;
+    const data = parseDaily(text);
+    const total = data.periods.reduce((n, p) => n + p.entries.length, 0);
+    const isToday = this.selectedDate === keyOf(new Date());
+
+    const head = card.createDiv({ cls: "dh-journal-head" });
+    const title = head.createDiv({ cls: "dh-journal-title" });
+    setIcon(title.createSpan({ cls: "dh-journal-icon" }), "notebook-pen");
+    const tt = title.createDiv();
+    tt.createEl("h2", { text: this.s.dateRecordFolder || "日常记录" });
+    const all = data.periods.flatMap((p) => p.entries);
+    tt.createDiv({
+      cls: "dh-card-sub",
+      text: total ? `${total} 条 · 最近 ${all[all.length - 1].time}` : isToday ? "今天还没有记录" : "这一天没有带时间的记录",
+    });
+    const actions = head.createDiv({ cls: "dh-head-actions" });
+    if (file) {
+      const open = actions.createEl("button", { cls: "dh-btn dh-btn-icon-only", attr: { "aria-label": "打开原文" } });
+      setIcon(open, "file-text");
+      open.addEventListener("click", (evt) => this.openFile(file, evt));
+    }
+    const add = actions.createEl("button", { cls: "dh-btn dh-btn-primary dh-journal-add", attr: { "aria-label": "记录此刻" } });
+    setIcon(add.createSpan({ cls: "dh-btn-icon" }), "plus");
+    add.createSpan({ cls: "dh-btn-label", text: isToday ? "记录此刻" : "记录" });
+    add.addEventListener("click", () => this.openRecordModal(this.recordProject()));
+
+    const body = card.createDiv({ cls: "dh-journal-body" });
+    const md = (target, content) => {
+      const el = target.createDiv({ cls: "markdown-rendered" });
+      MarkdownRenderer.render(this.app, content, el, file ? file.path : "", comp);
+      this.bindLinks(el, file ? file.path : "");
+      return el;
+    };
+    if (data.other) md(body.createDiv({ cls: "dh-journal-other" }), data.other);
+
+    const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+    let shown = 0;
+    for (const per of data.periods) {
+      const isNow = isToday && periodOf(nowMin) === PERIODS.find((p) => p.key === per.key);
+      if (!per.entries.length && !per.extra && !isNow) continue;
+      shown += 1;
+      const sec = body.createDiv({ cls: "dh-period" });
+      sec.toggleClass("is-now", isNow);
+      const ph = sec.createDiv({ cls: "dh-period-head" });
+      setIcon(ph.createSpan({ cls: "dh-period-icon" }), per.icon);
+      ph.createSpan({ cls: "dh-period-name", text: per.key });
+      if (per.entries.length) ph.createSpan({ cls: "dh-period-count", text: `${per.entries.length}` });
+
+      // 原有的整段文字（没有时间的部分）先显示，和笔记里的顺序一致
+      if (per.extra) md(sec.createDiv({ cls: "dh-tl-extra" }), per.extra);
+      const tl = sec.createDiv({ cls: "dh-tl" });
+      for (const e of per.entries) {
+        const item = tl.createDiv({ cls: "dh-tl-item", attr: { role: "button", tabindex: "0", "aria-label": `编辑 ${e.time} 的记录` } });
+        item.createDiv({ cls: "dh-tl-time", text: e.time });
+        item.createDiv({ cls: "dh-tl-dot" });
+        const content = item.createDiv({ cls: "dh-tl-body" });
+        if (e.text) md(content, e.text);
+        else content.createDiv({ cls: "dh-muted", text: "（空）" });
+        item.addEventListener("click", (evt) => {
+          if (evt.target.closest?.("a")) return;
+          this.openRecordModal(this.recordProject(), e);
+        });
+      }
+      if (isNow) {
+        const now = tl.createDiv({ cls: "dh-tl-item dh-tl-now", attr: { role: "button", tabindex: "0" } });
+        now.createDiv({ cls: "dh-tl-time", text: fmtTime(nowMin) });
+        now.createDiv({ cls: "dh-tl-dot" });
+        now.createDiv({ cls: "dh-tl-body dh-muted", text: "现在在做什么？点这里记一笔" });
+        now.addEventListener("click", () => this.openRecordModal(this.recordProject()));
+      }
+    }
+    if (!shown && !data.other) {
+      const empty = body.createDiv({ cls: "dh-journal-empty" });
+      empty.createDiv({ text: "这一天还没有日常记录。" });
+      const b = empty.createEl("button", { cls: "dh-btn dh-btn-soft" });
+      setIcon(b.createSpan({ cls: "dh-btn-icon" }), "plus");
+      b.createSpan({ cls: "dh-btn-label", text: "写第一条" });
+      b.addEventListener("click", () => this.openRecordModal(this.recordProject()));
+    }
   }
 
   async renderNotes(groups, sel, totalCount) {
@@ -1103,7 +1382,7 @@ class DailyHubView extends ItemView {
     this.els.dayCount.setText(`${visibleCount} / ${totalCount}`);
 
     if (!totalCount) {
-      this.emptyState(container, "calendar-plus", "这一天还没有日期笔记", "点击上方「今日内容」中的分类即可创建");
+      container.createDiv({ cls: "dh-muted dh-notes-empty", text: "其他项目这一天没有笔记，点「今日内容」里的项目按钮即可记录。" });
       return;
     }
     if (!visible.length) {
@@ -1219,6 +1498,158 @@ class DailyHubView extends ItemView {
 }
 
 /* ---------- modals ---------- */
+
+class RecordModal extends Modal {
+  constructor(app, plugin, { date, project, entry = null, onDone }) {
+    super(app);
+    this.plugin = plugin;
+    this.date = date;
+    this.project = project;
+    this.entry = entry;
+    this.onDone = onDone;
+    this.component = new Component();
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    this.component.load();
+    this.modalEl.addClass("dh-modal", "dh-record-modal");
+    const isRecord = this.project.isRecord;
+    const path = normalizePath(`${this.project.path}/${this.date}.md`);
+    const file = this.app.vault.getAbstractFileByPath(path);
+    const title = `${this.entry ? "编辑记录" : isRecord ? (this.date === keyOf(new Date()) ? "记录此刻" : "记录") : this.project.label} · ${shortDate(this.date)}`;
+    if (this.setTitle) this.setTitle(title);
+    else contentEl.createEl("h3", { text: title });
+
+    let timeInput = null;
+    let periodKey = null;
+    const isToday = this.date === keyOf(new Date());
+    // 只有今天才自动带上当前时间；其他日期直接记录（可选放到哪个时段）
+    const timed = isRecord && (isToday || Boolean(this.entry));
+    if (isRecord && !timed) {
+      const row = contentEl.createDiv({ cls: "dh-record-meta" });
+      row.createSpan({ cls: "dh-record-period", text: "放在：" });
+      const seg = row.createDiv({ cls: "dh-seg" });
+      const opts = [[null, "不分时段"], ...PERIODS.map((p) => [p.key, p.key])];
+      const btns = [];
+      for (const [key, label] of opts) {
+        const b = seg.createEl("button", { cls: "dh-seg-btn", text: label });
+        b.toggleClass("is-active", key === periodKey);
+        b.addEventListener("click", () => {
+          periodKey = key;
+          btns.forEach(([k, el]) => el.toggleClass("is-active", k === periodKey));
+        });
+        btns.push([key, b]);
+      }
+    }
+    if (timed) {
+      const row = contentEl.createDiv({ cls: "dh-record-meta" });
+      setIcon(row.createSpan({ cls: "dh-record-meta-icon" }), "clock");
+      timeInput = row.createEl("input", { cls: "dh-record-time", attr: { type: "time" } });
+      const now = new Date();
+      timeInput.value = this.entry ? this.entry.time : fmtTime(now.getHours() * 60 + now.getMinutes());
+      const per = row.createSpan({ cls: "dh-record-period" });
+      const upd = () => {
+        const m = parseTime(timeInput.value);
+        per.setText(m === null ? "" : `→ 写入「${periodOf(m).key}」`);
+      };
+      upd();
+      timeInput.addEventListener("input", upd);
+      const nowBtn = row.createEl("button", { cls: "dh-btn dh-btn-soft", text: "现在" });
+      nowBtn.addEventListener("click", () => {
+        const n = new Date();
+        timeInput.value = fmtTime(n.getHours() * 60 + n.getMinutes());
+        upd();
+      });
+    } else if (file) {
+      // 项目：先看看当天已有的内容
+      const prev = contentEl.createEl("details", { cls: "dh-record-prev" });
+      prev.createEl("summary", { text: "当天已有内容" });
+      const box = prev.createDiv({ cls: "markdown-rendered" });
+      this.app.vault.cachedRead(file).then((t) => {
+        if (t.trim()) MarkdownRenderer.render(this.app, t, box, file.path, this.component);
+        else box.createDiv({ cls: "dh-muted", text: "（空）" });
+      });
+    }
+
+    const ta = contentEl.createEl("textarea", {
+      cls: "dh-record-text",
+      attr: {
+        placeholder: !isRecord ? `写点${this.project.label}的内容…` : timed ? "此刻在做什么、想到什么…" : "补记这一天的内容…",
+        rows: "6",
+      },
+    });
+    if (this.entry) ta.value = this.entry.text;
+    contentEl.createDiv({ cls: "dh-muted dh-record-hint", text: Platform.isMobile ? "" : "Ctrl / ⌘ + Enter 保存" });
+
+    const actions = contentEl.createDiv({ cls: "dh-modal-actions" });
+    if (file) {
+      const open = actions.createEl("button", { cls: "dh-record-open", text: "打开笔记" });
+      open.addEventListener("click", async () => {
+        this.close();
+        await this.app.workspace.getLeaf(false).openFile(file);
+      });
+    }
+    if (this.entry) {
+      const del = actions.createEl("button", { cls: "mod-warning", text: "删除" });
+      del.addEventListener("click", async () => {
+        await this.plugin.writeDailyEntry(this.date, null, this.entry.raw);
+        new Notice("已删除这条记录");
+        this.close();
+        this.onDone?.();
+      });
+    }
+    actions.createEl("button", { text: "取消" }).addEventListener("click", () => this.close());
+    const ok = actions.createEl("button", { cls: "mod-cta", text: "保存" });
+    const save = async () => {
+      const text = ta.value.replace(/\s+$/, "");
+      if (!text.trim()) {
+        if (!this.entry) {
+          ta.focus();
+          return;
+        }
+      }
+      ok.disabled = true;
+      try {
+        if (isRecord && !timed) {
+          await this.plugin.writeDailyEntry(this.date, null, null, { key: periodKey, text });
+          new Notice(periodKey ? `已记录到「${periodKey}」` : "已记录");
+        } else if (isRecord) {
+          const min = parseTime(timeInput.value);
+          if (min === null) {
+            new Notice("时间格式不对");
+            ok.disabled = false;
+            return;
+          }
+          await this.plugin.writeDailyEntry(this.date, text.trim() ? { min, text } : null, this.entry ? this.entry.raw : null);
+          new Notice(`已记录到「${periodOf(min).key}」${fmtTime(min)}`);
+        } else {
+          await this.plugin.appendProjectRecord(this.project.path, this.date, text);
+          new Notice(`已写入「${this.project.label}」`);
+        }
+        this.close();
+        this.onDone?.();
+      } catch (err) {
+        console.error("[daily-hub] save record failed", err);
+        new Notice(`保存失败：${err.message || err}`);
+        ok.disabled = false;
+      }
+    };
+    ok.addEventListener("click", save);
+    ta.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.isComposing) {
+        e.preventDefault();
+        save();
+      }
+    });
+    window.setTimeout(() => ta.focus(), 60);
+  }
+
+  onClose() {
+    this.component.unload();
+    this.contentEl.empty();
+  }
+}
 
 class NewProjectModal extends Modal {
   constructor(app, plugin) {
@@ -2103,6 +2534,37 @@ module.exports = class DailyHubPlugin extends Plugin {
       task.raw = lines[idx];
       task.line = idx;
       return lines.join("\n");
+    });
+  }
+
+  /** 写入 / 修改 / 删除一条日常记录，并整理为上午、下午、晚上 */
+  async writeDailyEntry(date, add, removeRaw = null, addText = null) {
+    const folder = normalizePath(this.settings.dateRecordFolder);
+    const path = normalizePath(`${folder}/${date}.md`);
+    const adds = add ? [add] : [];
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!file) {
+      if (!adds.length && !addText) return;
+      if (!isFolder(this.app.vault.getAbstractFileByPath(folder))) await this.app.vault.createFolder(folder);
+      await this.app.vault.create(path, organizeDaily("", { add: adds, addText }));
+      return;
+    }
+    await this.app.vault.process(file, (t) => organizeDaily(t, { add: adds, removeRaw, addText }));
+  }
+
+  /** 项目：在当天笔记末尾追加一段 */
+  async appendProjectRecord(projectPath, date, text) {
+    const path = normalizePath(`${projectPath}/${date}.md`);
+    const file = this.app.vault.getAbstractFileByPath(path);
+    const body = text.replace(/\s+$/, "");
+    if (!file) {
+      if (!isFolder(this.app.vault.getAbstractFileByPath(projectPath))) await this.app.vault.createFolder(projectPath);
+      await this.app.vault.create(path, `${body}\n`);
+      return;
+    }
+    await this.app.vault.process(file, (t) => {
+      const trimmed = t.replace(/\s+$/, "");
+      return `${trimmed}${trimmed ? "\n\n" : ""}${body}\n`;
     });
   }
 

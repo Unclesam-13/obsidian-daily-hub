@@ -1445,6 +1445,319 @@
   flex-wrap: nowrap;
 }
 
+/* ===== v1.4 日常记录时间线 ===== */
+
+.dh-journal {
+  padding: 20px 22px 18px;
+  border-color: var(--dh-accent-line);
+  background:
+    radial-gradient(120% 80% at 100% 0%, var(--dh-accent-soft), transparent 60%),
+    var(--dh-card);
+}
+
+.dh-journal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.dh-journal-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.dh-journal-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: var(--dh-accent);
+  color: var(--text-on-accent);
+}
+
+.dh-journal-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.dh-view .dh-journal-title h2 {
+  font-size: 1.2em;
+}
+
+.dh-journal-add {
+  height: 38px;
+  padding: 0 16px;
+  font-size: var(--font-ui-small);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--dh-accent) 35%, transparent) !important;
+}
+
+.dh-journal-other {
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border-radius: var(--dh-radius-s);
+  background: var(--dh-bg);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.dh-journal-other .markdown-rendered > :first-child,
+.dh-tl-extra .markdown-rendered > :first-child,
+.dh-tl-body .markdown-rendered > :first-child {
+  margin-top: 0;
+}
+
+.dh-journal-other .markdown-rendered > :last-child,
+.dh-tl-extra .markdown-rendered > :last-child,
+.dh-tl-body .markdown-rendered > :last-child {
+  margin-bottom: 0;
+}
+
+.dh-period + .dh-period {
+  margin-top: 14px;
+}
+
+.dh-period-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  font-weight: 700;
+}
+
+.dh-period-icon {
+  display: inline-flex;
+  color: var(--dh-accent);
+}
+
+.dh-period-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.dh-period-count {
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--dh-accent-soft);
+  color: var(--dh-accent);
+  font-size: var(--font-ui-smaller);
+}
+
+.dh-period.is-now .dh-period-name::after {
+  content: " · 现在";
+  color: var(--dh-accent);
+}
+
+.dh-tl {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.dh-tl::before {
+  content: "";
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 61px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--dh-accent-line);
+}
+
+.dh-tl-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 48px 26px minmax(0, 1fr);
+  align-items: start;
+  padding: 6px 8px 6px 0;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.dh-tl-item:hover {
+  background: var(--background-modifier-hover);
+}
+
+.dh-tl-time {
+  padding-top: 1px;
+  text-align: right;
+  color: var(--dh-accent);
+  font-size: var(--font-ui-small);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.dh-tl-dot {
+  justify-self: center;
+  width: 10px;
+  height: 10px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: var(--dh-card);
+  border: 2.5px solid var(--dh-accent);
+  z-index: 1;
+}
+
+.dh-tl-body {
+  min-width: 0;
+  color: var(--text-normal);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.dh-tl-now .dh-tl-time {
+  color: var(--text-faint);
+}
+
+.dh-tl-now .dh-tl-dot {
+  border-style: dashed;
+  border-color: var(--text-faint);
+}
+
+.dh-tl-now .dh-tl-body {
+  font-size: var(--font-ui-small);
+}
+
+.dh-tl-extra {
+  margin: 0 0 6px 74px;
+  padding: 8px 12px;
+  border-left: 2px solid var(--dh-border);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  line-height: 1.7;
+}
+
+.dh-journal-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 26px 12px;
+  border: 1.5px dashed var(--dh-border);
+  border-radius: var(--dh-radius-s);
+  color: var(--text-muted);
+}
+
+.dh-subhead {
+  margin: 6px 4px -4px;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.dh-notes-empty {
+  padding: 4px 4px 0;
+}
+
+/* 记录弹窗 */
+.dh-record-modal {
+  width: min(560px, 96vw);
+}
+
+.dh-record-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 10px;
+  flex-wrap: wrap;
+}
+
+.dh-record-meta-icon {
+  display: inline-flex;
+  color: var(--interactive-accent);
+}
+
+.dh-record-time {
+  height: 36px;
+  font-size: var(--font-ui-medium);
+  font-variant-numeric: tabular-nums;
+}
+
+.dh-record-period {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.dh-record-meta .dh-btn {
+  margin-left: auto;
+}
+
+.dh-record-text {
+  width: 100%;
+  min-height: 140px;
+  padding: 10px 12px;
+  resize: vertical;
+  font-size: var(--font-ui-medium);
+  line-height: 1.6;
+}
+
+.dh-record-hint {
+  margin-top: 4px;
+  text-align: right;
+  font-size: var(--font-ui-smaller);
+}
+
+.dh-record-prev {
+  margin: 4px 0 10px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--background-secondary);
+}
+
+.dh-record-prev summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.dh-record-prev .markdown-rendered {
+  max-height: 200px;
+  overflow-y: auto;
+  margin-top: 6px;
+  font-size: var(--font-ui-small);
+}
+
+.dh-seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--background-secondary);
+}
+
+.dh-seg-btn {
+  height: 30px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.dh-seg-btn.is-active {
+  background: var(--background-primary);
+  color: var(--interactive-accent);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.dh-record-open {
+  margin-right: auto;
+}
+
 /* ===== 窄屏 / 手机 ===== */
 
 @container dh (max-width: 860px) {
@@ -1585,6 +1898,22 @@
   }
   .dh-tab {
     height: 38px;
+  }
+  .dh-journal {
+    padding: 14px 12px 12px;
+  }
+  .dh-journal-icon {
+    width: 34px;
+    height: 34px;
+  }
+  .dh-tl::before {
+    left: 53px;
+  }
+  .dh-tl-item {
+    grid-template-columns: 42px 24px minmax(0, 1fr);
+  }
+  .dh-tl-extra {
+    margin-left: 66px;
   }
   .dh-todo {
     padding: 9px 8px;
