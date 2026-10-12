@@ -922,11 +922,12 @@ class DailyHubView extends ItemView {
     });
   }
 
-  openRecordModal(project, entry = null) {
+  openRecordModal(project, entry = null, preset = null) {
     new RecordModal(this.app, this.plugin, {
       date: this.selectedDate,
       project,
       entry,
+      preset,
       onDone: () => this.refresh(),
     }).open();
   }
@@ -1327,7 +1328,8 @@ class DailyHubView extends ItemView {
     let shown = 0;
     for (const per of data.periods) {
       const isNow = isToday && periodOf(nowMin) === PERIODS.find((p) => p.key === per.key);
-      if (!per.entries.length && !per.extra && !isNow) continue;
+      const passed = isToday && per.from <= nowMin;
+      if (!per.entries.length && !per.extra && !isNow && !passed) continue;
       shown += 1;
       const sec = body.createDiv({ cls: "dh-period" });
       sec.toggleClass("is-now", isNow);
@@ -1335,6 +1337,16 @@ class DailyHubView extends ItemView {
       setIcon(ph.createSpan({ cls: "dh-period-icon" }), per.icon);
       ph.createSpan({ cls: "dh-period-name", text: per.key });
       if (per.entries.length) ph.createSpan({ cls: "dh-period-count", text: `${per.entries.length}` });
+      // 已经过去（或正在进行）的时段可以直接补记，不带具体时间
+      if (!isToday || per.from <= nowMin) {
+        const recall = ph.createEl("button", { cls: "dh-period-recall", attr: { "aria-label": `补记${per.key}` } });
+        setIcon(recall.createSpan({ cls: "dh-period-recall-icon" }), "history");
+        recall.createSpan({ text: "补记" });
+        recall.addEventListener("click", (evt) => {
+          evt.stopPropagation();
+          this.openRecordModal(this.recordProject(), null, per.key);
+        });
+      }
 
       // 原有的整段文字（没有时间的部分）先显示，和笔记里的顺序一致
       if (per.extra) md(sec.createDiv({ cls: "dh-tl-extra" }), per.extra);
@@ -1350,6 +1362,9 @@ class DailyHubView extends ItemView {
           if (evt.target.closest?.("a")) return;
           this.openRecordModal(this.recordProject(), e);
         });
+      }
+      if (!per.entries.length && !per.extra && !isNow) {
+        sec.createDiv({ cls: "dh-muted dh-period-empty", text: `${per.key}还没有记录，忘了写可以点右边的「补记」` });
       }
       if (isNow) {
         const now = tl.createDiv({ cls: "dh-tl-item dh-tl-now", attr: { role: "button", tabindex: "0" } });
@@ -1500,9 +1515,10 @@ class DailyHubView extends ItemView {
 /* ---------- modals ---------- */
 
 class RecordModal extends Modal {
-  constructor(app, plugin, { date, project, entry = null, onDone }) {
+  constructor(app, plugin, { date, project, entry = null, preset = null, onDone }) {
     super(app);
     this.plugin = plugin;
+    this.preset = preset;
     this.date = date;
     this.project = project;
     this.entry = entry;
@@ -1517,37 +1533,23 @@ class RecordModal extends Modal {
     const isRecord = this.project.isRecord;
     const path = normalizePath(`${this.project.path}/${this.date}.md`);
     const file = this.app.vault.getAbstractFileByPath(path);
-    const title = `${this.entry ? "编辑记录" : isRecord ? (this.date === keyOf(new Date()) ? "记录此刻" : "记录") : this.project.label} · ${shortDate(this.date)}`;
+    const title = `${this.entry ? "编辑记录" : isRecord ? "日常记录" : this.project.label} · ${shortDate(this.date)}`;
     if (this.setTitle) this.setTitle(title);
     else contentEl.createEl("h3", { text: title });
 
-    let timeInput = null;
-    let periodKey = null;
+    // 记录方式：edit 修改已有条目；now 此刻（精确时间）；recall 回忆补记（不带时间，可选时段）
     const isToday = this.date === keyOf(new Date());
-    // 只有今天才自动带上当前时间；其他日期直接记录（可选放到哪个时段）
-    const timed = isRecord && (isToday || Boolean(this.entry));
-    if (isRecord && !timed) {
-      const row = contentEl.createDiv({ cls: "dh-record-meta" });
-      row.createSpan({ cls: "dh-record-period", text: "放在：" });
-      const seg = row.createDiv({ cls: "dh-seg" });
-      const opts = [[null, "不分时段"], ...PERIODS.map((p) => [p.key, p.key])];
-      const btns = [];
-      for (const [key, label] of opts) {
-        const b = seg.createEl("button", { cls: "dh-seg-btn", text: label });
-        b.toggleClass("is-active", key === periodKey);
-        b.addEventListener("click", () => {
-          periodKey = key;
-          btns.forEach(([k, el]) => el.toggleClass("is-active", k === periodKey));
-        });
-        btns.push([key, b]);
-      }
-    }
-    if (timed) {
+    const openedAt = new Date();
+    const nowMin = openedAt.getHours() * 60 + openedAt.getMinutes();
+    let mode = !isRecord ? "project" : this.entry ? "edit" : isToday && !this.preset ? "now" : "recall";
+    let periodKey = this.preset || null;
+    let timeInput = null;
+
+    if (isRecord && this.entry) {
       const row = contentEl.createDiv({ cls: "dh-record-meta" });
       setIcon(row.createSpan({ cls: "dh-record-meta-icon" }), "clock");
       timeInput = row.createEl("input", { cls: "dh-record-time", attr: { type: "time" } });
-      const now = new Date();
-      timeInput.value = this.entry ? this.entry.time : fmtTime(now.getHours() * 60 + now.getMinutes());
+      timeInput.value = this.entry.time;
       const per = row.createSpan({ cls: "dh-record-period" });
       const upd = () => {
         const m = parseTime(timeInput.value);
@@ -1555,14 +1557,49 @@ class RecordModal extends Modal {
       };
       upd();
       timeInput.addEventListener("input", upd);
-      const nowBtn = row.createEl("button", { cls: "dh-btn dh-btn-soft", text: "现在" });
-      nowBtn.addEventListener("click", () => {
-        const n = new Date();
-        timeInput.value = fmtTime(n.getHours() * 60 + n.getMinutes());
-        upd();
-      });
-    } else if (file) {
-      // 项目：先看看当天已有的内容
+    } else if (isRecord) {
+      const row = contentEl.createDiv({ cls: "dh-record-meta" });
+      const seg = row.createDiv({ cls: "dh-seg" });
+      const opts = isToday
+        ? [["now", `此刻 ${fmtTime(nowMin)}`], ...PERIODS.map((p) => [p.key, `补记${p.key}`, p.from > nowMin])]
+        : [[null, "不分时段"], ...PERIODS.map((p) => [p.key, p.key])];
+      const hint = contentEl.createDiv({ cls: "dh-muted dh-record-mode-hint" });
+      const btns = [];
+      const sync = () => {
+        const cur = mode === "now" ? "now" : periodKey;
+        btns.forEach(([k, el]) => el.toggleClass("is-active", k === cur));
+        if (mode === "now") hint.setText(`记下精确时间 ${fmtTime(nowMin)}，写入「${periodOf(nowMin).key}」`);
+        else if (periodKey) hint.setText(`回忆补记，不记录具体时间，写在「${periodKey}」末尾`);
+        else hint.setText("不记录时间，写在这一天笔记的开头");
+        ta && (ta.placeholder = mode === "now" ? "此刻在做什么、想到什么…" : "回忆一下当时做了什么…");
+      };
+      for (const [key, label, disabled] of opts) {
+        const b = seg.createEl("button", { cls: "dh-seg-btn", text: label });
+        if (disabled) {
+          b.disabled = true;
+          b.setAttr("title", "这个时段还没到");
+        }
+        b.addEventListener("click", () => {
+          if (key === "now") {
+            mode = "now";
+            periodKey = null;
+          } else {
+            mode = "recall";
+            periodKey = key;
+          }
+          sync();
+        });
+        btns.push([key, b]);
+      }
+      // 打开时若是今天又没有指定时段，默认「此刻」；若指定了还没到的时段，退回「此刻」
+      if (isToday && periodKey && PERIODS.find((p) => p.key === periodKey).from > nowMin) {
+        mode = "now";
+        periodKey = null;
+      }
+      this.syncMode = sync;
+    }
+    if (file && !this.entry && mode !== "now") {
+      // 先看看当天已有的内容
       const prev = contentEl.createEl("details", { cls: "dh-record-prev" });
       prev.createEl("summary", { text: "当天已有内容" });
       const box = prev.createDiv({ cls: "markdown-rendered" });
@@ -1572,13 +1609,15 @@ class RecordModal extends Modal {
       });
     }
 
-    const ta = contentEl.createEl("textarea", {
+    let ta = null;
+    ta = contentEl.createEl("textarea", {
       cls: "dh-record-text",
       attr: {
-        placeholder: !isRecord ? `写点${this.project.label}的内容…` : timed ? "此刻在做什么、想到什么…" : "补记这一天的内容…",
+        placeholder: !isRecord ? `写点${this.project.label}的内容…` : mode === "recall" ? "回忆一下当时做了什么…" : "此刻在做什么、想到什么…",
         rows: "6",
       },
     });
+    this.syncMode?.();
     if (this.entry) ta.value = this.entry.text;
     contentEl.createDiv({ cls: "dh-muted dh-record-hint", text: Platform.isMobile ? "" : "Ctrl / ⌘ + Enter 保存" });
 
@@ -1611,10 +1650,13 @@ class RecordModal extends Modal {
       }
       ok.disabled = true;
       try {
-        if (isRecord && !timed) {
+        if (mode === "recall") {
           await this.plugin.writeDailyEntry(this.date, null, null, { key: periodKey, text });
-          new Notice(periodKey ? `已记录到「${periodKey}」` : "已记录");
-        } else if (isRecord) {
+          new Notice(periodKey ? `已补记到「${periodKey}」` : "已记录");
+        } else if (mode === "now") {
+          await this.plugin.writeDailyEntry(this.date, { min: nowMin, text });
+          new Notice(`已记录到「${periodOf(nowMin).key}」${fmtTime(nowMin)}`);
+        } else if (mode === "edit") {
           const min = parseTime(timeInput.value);
           if (min === null) {
             new Notice("时间格式不对");

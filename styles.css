@@ -1556,6 +1556,41 @@
   color: var(--dh-accent);
 }
 
+.dh-period-recall {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  margin-left: auto;
+  padding: 0 9px;
+  border: 1px solid var(--dh-border);
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: 500;
+}
+
+.dh-period-recall:hover {
+  border-color: var(--dh-accent-line);
+  color: var(--dh-accent);
+}
+
+.dh-period-recall-icon {
+  display: inline-flex;
+}
+
+.dh-period-recall-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.dh-period-empty {
+  margin: 0 0 4px 74px;
+  font-size: var(--font-ui-smaller);
+}
+
 .dh-tl {
   position: relative;
   display: flex;
@@ -1747,6 +1782,16 @@
   font-size: var(--font-ui-small);
 }
 
+.dh-seg-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.dh-record-mode-hint {
+  margin: -4px 0 10px;
+  font-size: var(--font-ui-smaller);
+}
+
 .dh-seg-btn.is-active {
   background: var(--background-primary);
   color: var(--interactive-accent);
@@ -1912,8 +1957,12 @@
   .dh-tl-item {
     grid-template-columns: 42px 24px minmax(0, 1fr);
   }
-  .dh-tl-extra {
+  .dh-tl-extra,
+  .dh-period-empty {
     margin-left: 66px;
+  }
+  .dh-seg {
+    flex-wrap: wrap;
   }
   .dh-todo {
     padding: 9px 8px;
